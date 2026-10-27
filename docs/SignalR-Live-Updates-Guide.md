@@ -15,6 +15,7 @@ something happens, for example "the gate command was confirmed". Your app does n
 
 1. What you need before you start
 2. The address and the permission
+2A. IoT events: what they are and how to get them
 3. Step 1: load the library
 4. Step 2: build the connection (every option explained)
 5. Step 3: listen for events
@@ -78,6 +79,96 @@ If the person lacks the permission, the connection is refused:
 
 No API call tells you in advance whether the permission exists. **Try to connect**, and if it is refused, use
 the fallback of section 16.
+
+## 2A. IoT events: what they are and how to get them
+
+**An IoT event is one small record that the platform creates when something happens.** For example: a button
+press was accepted, delivered or confirmed, or a device reported that one of its inputs changed. Events are
+only created by the platform. Your app never sends one. It only receives them.
+
+Every event has the same shape (CloudEvents): `id`, `type`, `subject`, `time`, `sequence`, `data` and a few
+more boxes (section 7). The `type` tells you what happened (section 8).
+
+### The three ways to get events
+
+| Way | What it is | Who uses it | When to use it |
+| --- | --- | --- | --- |
+| **The live line (SignalR)** | The server pushes each event to the phone the moment it happens | The mobile app | To know a result **at once**. The rest of this guide |
+| **The list call `GET /iot/v1/events`** | You ask for events that already happened, newest first | The mobile app (to catch up), reports | After a reconnect, to see what you missed, or to show a history |
+| **Webhooks and MQTT** | The platform sends the same events to a partner's server or broker | Partner systems, not phones | To connect another system. Not needed in a phone app |
+
+It is the **same event** in all three ways. An event you saw on the line is also in the list.
+
+### Who may read events
+
+| What | Who | What is needed |
+| --- | --- | --- |
+| The live line | A person | `IOT_EVENTS` View. Every role with `OPS_FUNCTIONS` View has it from platform 5.7.0 |
+| The live line | A machine client | The scope `events.subscribe` |
+| The list call `GET /iot/v1/events` | A person | `OPS_COMMANDS` View, or `IOT_EVENTS` View, or `OPS_FUNCTIONS` Manage |
+| The list call `GET /iot/v1/events` | A machine client | The scope `iot.read` or `iot.operate` |
+
+A person only sees the events of **their own organizations**. A button shared by another organization sends
+its events to its own organization, not to you.
+
+### The list call, in detail
+
+```http
+GET /iot/v1/events?type=se.mcf.iot.command.*&deviceId=dev_9Pz4Wc&since=2026-10-09T08:00:00Z&pageSize=50
+Authorization: Bearer <access token>
+```
+
+| Parameter | Meaning |
+| --- | --- |
+| `type` | An exact type, or the start of a type with `*` at the end, for example `se.mcf.iot.command.*` |
+| `deviceId` | Only events of this device (`dev_...`). An unknown or foreign id gives an empty page, not an error |
+| `functionId` | Only events of this button (`fn_...`). Same rule |
+| `since` | At or after this time (ISO 8601). Without a time zone it means UTC |
+| `page` | Page number, starting at 1 |
+| `pageSize` | Events per page. Default 50, at most 200 |
+
+The answer is a normal list: `data` holds `items`, `page`, `pageSize`, `totalCount`, `totalPages`,
+`hasPreviousPage` and `hasNextPage`. The events are **newest first**. An example (illustrative):
+
+```json
+{
+  "success": true,
+  "data": {
+    "items": [
+      { "id": "evt_8Kq2", "type": "se.mcf.iot.command.confirmed.v1", "subject": "cmd_5Rt7Yb",
+        "time": "2026-10-09T08:00:03.412Z", "sequence": 41,
+        "data": { "commandId": "cmd_5Rt7Yb", "deviceId": "dev_9Pz4Wc" } },
+      { "id": "evt_8Kq1", "type": "se.mcf.iot.command.delivered.v1", "subject": "cmd_5Rt7Yb",
+        "time": "2026-10-09T08:00:01.050Z", "sequence": 40,
+        "data": { "commandId": "cmd_5Rt7Yb", "deviceId": "dev_9Pz4Wc" } }
+    ],
+    "page": 1, "pageSize": 50, "totalCount": 2, "totalPages": 1,
+    "hasPreviousPage": false, "hasNextPage": false
+  }
+}
+```
+
+To read all pages, keep asking with `page=2, 3, ...` while `hasNextPage` is `true`.
+
+| Answer | Meaning |
+| --- | --- |
+| `200` | The list |
+| `400` `EVENT_TYPE_INVALID` or `FIELD_TYPE_INVALID` | A wrong `type` or a wrongly shaped value |
+| `401` | No token, or an old one |
+| `403` | Missing permission (`PERMISSION_DENIED` and similar) |
+| `429` `RATE_LIMITED` | Too many calls. Wait and try again |
+
+### Things that are good to know
+
+- **Events are facts, not commands.** A `confirmed` event does not make anything happen. It reports that it did.
+- **Order.** Each event has a `sequence` number inside its device's stream, **without gaps**. Use it to see
+  that you lost one (section 14).
+- **Types.** Eight command types are listed (accepted, approval.requested, delivered, confirmed, failed,
+  timedout, cancelled, rejected). Device types start with `se.mcf.iot.device.`. Each type ends in `.v1`.
+- **The shape of `data`** for each type is described at the path in the event's `dataschema` box:
+  `/iot/v1/schemas/events/{type}`. Ask that path once per type when you need the exact boxes.
+- **Alarms and notifications** are a different thing. The app reads them with `GET /iot/v1/notifications` and
+  `GET /iot/v1/conditions`.
 
 ## 3. Step 1: load the library
 
