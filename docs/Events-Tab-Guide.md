@@ -36,6 +36,7 @@ status of a button press. If you want the tab to update at the moment something 
 11. Errors and what the app does
 12. What I could not confirm
 13. Cheat sheet
+14. Worked example: reading a screenshot row by row
 
 ---
 
@@ -395,3 +396,87 @@ Chips            : All | Commands (kind cmd) | Alerts (everything that is not cm
 Count            : "N open alerts" = red rows that are still open
 Make it live     : on a SignalR event, call the same refresh (debounce ~500 ms); keep the 60 s timer
 ```
+
+---
+
+## 14. Worked example: reading a screenshot row by row
+
+This is the demo data (the names say "FAKE"). A real account works the same way.
+
+```
+TODAY
+ [blue ]  Approval needed: Bollards - Lower              14:06   [Approve]
+          Requested by fake.colleague · Maintenance · Central depot (FAKE)
+ [blue ]  Garage 12 - Open · Confirmed                   13:58
+          Garage doors · by fake.officer
+ [red  ]  Gate B sensor offline                          13:34   [Acknowledge]
+          Central depot (FAKE) · Warning · Active
+ [red  ]  Garage 12 - Close was not confirmed            13:30
+          The device did not report a new state in time. · Fire station North (FAKE)
+```
+
+### Row 1: "Approval needed: Bollards - Lower" with **Approve**
+
+It is a **notification** (`GET /iot/v1/notifications`):
+
+```json
+{ "notificationId": "ntf_2", "type": "command.approval.requested", "severity": "Info",
+  "title": "Approval needed: Bollards - Lower", "body": "Requested by fake.colleague · Maintenance",
+  "siteId": "site_2Lp8Xz", "commandId": "cmd_demoApprove",
+  "occurredAt": "2026-10-09T14:06:00Z", "read": false }
+```
+
+| What you see | Why |
+| --- | --- |
+| Blue icon | `severity` is `Info`, not warn, crit, high or err |
+| Title | `title` |
+| Small line | `body`, then the building name found from `siteId` ("Central depot (FAKE)") |
+| 14:06 | `occurredAt` |
+| **Approve** button | `type` contains "approv" **and** `commandId` is set **and** `read` is `false` |
+
+### Row 2: "Garage 12 - Open · Confirmed" (no button)
+
+A **local row**. The phone made it when that press ended: `<button name> · <status word>`, then
+`<category> · by <person's name>`. It comes from no request, so it has no `id` on the server side and no button.
+The server's own record of the same press may show up later as a notification.
+
+### Row 3: "Gate B sensor offline" with **Acknowledge**
+
+An **alarm** (`GET /iot/v1/conditions`):
+
+```json
+{ "conditionId": "cnd_1", "ruleName": "Gate B sensor offline", "state": "Active",
+  "severity": "Warning", "subject": { "siteId": "site_2Lp8Xz", "deviceId": "dev_16" },
+  "since": "2026-10-09T13:34:00Z", "acknowledgedAt": null }
+```
+
+| What you see | Why |
+| --- | --- |
+| Red icon | Every alarm is a red row |
+| Title | `ruleName` |
+| Small line | The building (from `subject.siteId`), then `severity`, then "Active" because `acknowledgedAt` is empty |
+| 13:34 | `since` |
+| **Acknowledge** button | `acknowledgedAt` is empty |
+
+### Row 4: "Garage 12 - Close was not confirmed" (no button)
+
+A **notification**:
+
+```json
+{ "notificationId": "ntf_1", "type": "command.failed", "severity": "Warning",
+  "title": "Garage 12 - Close was not confirmed", "body": "The device did not report a new state in time.",
+  "siteId": "site_7Hq2k9", "commandId": null, "occurredAt": "2026-10-09T13:30:00Z", "read": false }
+```
+
+Red icon because `severity` is `Warning`. No button, because the type does not contain "approv". It counts in
+"N open alerts" while it is unread.
+
+### What happens when you tap
+
+| Tap | Request | After it works |
+| --- | --- | --- |
+| **Approve** (row 1) | `POST /iot/v1/commands/cmd_demoApprove/approve` with `{}` | Toast "Approved - the command will run". The notification is marked read (`POST /iot/v1/notifications/ntf_2/read`). The list refreshes and the row loses its button |
+| **Acknowledge** (row 3) | `POST /iot/v1/conditions/cnd_1/acknowledge` with `{}` | Toast "Alarm acknowledged". The list refreshes. The small line says "Acknowledged" and the open count goes down by one |
+
+Who may tap: Approve needs `OPS_APPROVE` Manage and the person who made the press can never approve it.
+Acknowledge needs `IOT_SUPERVISION` Manage (otherwise the app says "You can't acknowledge alarms").
